@@ -88,6 +88,7 @@ sleep 1
 # Crea directory logs
 mkdir -p "$SCRIPT_DIR/logs"
 mkdir -p "$SCRIPT_DIR/graphs"
+chown -R "${SUDO_USER:-$USER}":"${SUDO_USER:-$USER}" "$SCRIPT_DIR/logs" "$SCRIPT_DIR/graphs" 2>/dev/null || true
 
 # Avvia controller Ryu
 echo "[3/5] Avvio controller Ryu SDN..."
@@ -116,7 +117,7 @@ echo "    h1 python3 $SCRIPT_DIR/run_tests.py"
 echo ""
 echo "  Per generare i grafici (dopo i test):"
 echo "    exit (dalla CLI Mininet)"
-echo "    python3 $SCRIPT_DIR/analyze_results.py"
+echo "    $SCRIPT_DIR/venv/bin/python3 $SCRIPT_DIR/analyze_results.py"
 echo "=============================================="
 echo ""
 

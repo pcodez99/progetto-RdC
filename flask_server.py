@@ -11,56 +11,39 @@ Avvio:
 
 import argparse
 import csv
-import json
 import os
 import subprocess
-import time
 from datetime import datetime
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
-# Configurazione globale (impostata da argparse)
 SERVER_NAME = 'S1'
 SERVER_PORT = 5001
 LOG_DIR = './logs'
 
-# Tutti i nodi della topologia con i relativi IP
+# H2/H4 esclusi: bloccati dal firewall R1 (10.0.1.0/24 → 192.168.2.0/24 DROP)
+# S1/S2 esclusi: iptables su ciascuno accetta solo connessioni dal PROXY
 TARGETS = {
     'H1': '192.168.1.1',
-    'H2': '192.168.2.1',
     'H3': '192.168.1.2',
-    'H4': '192.168.2.2',
     'H5': '192.168.1.3',
     'H6': '192.168.1.4',
     'H7': '192.168.1.5',
-    'R1_VLAN1': '192.168.1.254',
-    'R1_WAN': '200.0.1.1',
-    'R2_WAN': '200.0.1.2',
-    'R2_SVC': '10.0.1.1',
-    'S1': '10.0.1.2',
     'PROXY': '10.0.1.3',
-    'S2': '10.0.1.4',
 }
 
-# Porta iperf server sugli host
 IPERF_PORT = 5201
 
 
 def run_iperf_test(target_ip, duration=10):
-    """
-    Esegue un test iperf TCP verso il target e restituisce i risultati.
-    Usa iperf (v2) con output CSV (-y C).
-
-    Returns:
-        dict con i risultati o errore
-    """
+    """Esegue un test iperf TCP verso il target e restituisce i risultati."""
     try:
         cmd = [
             'iperf', '-c', target_ip,
             '-p', str(IPERF_PORT),
             '-t', str(duration),
-            '-y', 'C'  # Output CSV
+            '-y', 'C'
         ]
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=duration + 30
@@ -74,9 +57,8 @@ def run_iperf_test(target_ip, duration=10):
                 'bandwidth_bps': 0
             }
 
-        # Parsa output CSV di iperf
-        # Formato: timestamp,source_ip,source_port,dest_ip,dest_port,
-        #          transfer_id,interval,transfer_bytes,bandwidth_bps
+        # Formato CSV iperf: timestamp,src_ip,src_port,dst_ip,dst_port,
+        #                     transfer_id,interval,transfer_bytes,bandwidth_bps
         output = result.stdout.strip()
         if not output:
             return {
@@ -86,8 +68,7 @@ def run_iperf_test(target_ip, duration=10):
                 'bandwidth_bps': 0
             }
 
-        # Prendi l'ultima riga (sommario)
-        last_line = output.strip().split('\n')[-1]
+        last_line = output.split('\n')[-1]
         fields = last_line.split(',')
 
         if len(fields) >= 9:
@@ -169,7 +150,6 @@ def throughput_all():
 
     results = {}
     for name, ip in TARGETS.items():
-        # Escludi se stesso
         if exclude_self and name == SERVER_NAME:
             continue
 
@@ -191,13 +171,12 @@ def throughput_all():
 def throughput_single(target):
     """
     Esegue test iperf verso un nodo specifico.
-    target puo' essere un nome (H1, H2, ...) o un IP.
+    target puo' essere un nome (H1, H3, ...) o un IP.
     Query params:
       - duration: durata test in secondi (default 10)
     """
     duration = request.args.get('duration', 10, type=int)
 
-    # Cerca per nome o usa come IP diretto
     if target.upper() in TARGETS:
         target_name = target.upper()
         target_ip = TARGETS[target_name]

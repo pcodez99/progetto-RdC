@@ -16,18 +16,14 @@ Uso da CLI Mininet:
 import csv
 import json
 import os
-import socket
 import subprocess
-import sys
 import time
 from datetime import datetime
 
-# Configurazione
 PROXY_IP = '10.0.1.3'
 PROXY_PORT = 80
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 
-# Nodi della topologia per test di connettivita
 ALL_NODES = {
     'H1': '192.168.1.1',
     'H2': '192.168.2.1',
@@ -43,9 +39,6 @@ ALL_NODES = {
     'S2': '10.0.1.4',
 }
 
-VLAN1_HOSTS = ['H1', 'H3', 'H5', 'H6', 'H7']
-VLAN2_HOSTS = ['H2', 'H4']
-
 
 def ping_test(target_ip, count=3, timeout=5):
     """Esegue un ping test e restituisce i risultati."""
@@ -54,7 +47,6 @@ def ping_test(target_ip, count=3, timeout=5):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
         output = result.stdout
-        # Parsa RTT dalla riga "rtt min/avg/max/mdev = ..."
         rtt_line = [l for l in output.split('\n') if 'rtt' in l or 'round-trip' in l]
         if rtt_line:
             parts = rtt_line[0].split('=')[1].strip().split('/')
@@ -67,7 +59,6 @@ def ping_test(target_ip, count=3, timeout=5):
                 'packet_loss': 0
             }
 
-        # Controlla packet loss
         loss_line = [l for l in output.split('\n') if 'packet loss' in l]
         if loss_line:
             loss = loss_line[0].split('%')[0].split()[-1]
@@ -115,7 +106,6 @@ def test_connectivity():
         rtt = f"RTT={result['rtt_avg']:.1f}ms" if result['status'] == 'success' else ''
         print(f"  {name:15s} ({ip:15s}) -> {status:5s} {rtt}")
 
-    # Salva risultati
     os.makedirs(LOG_DIR, exist_ok=True)
     with open(os.path.join(LOG_DIR, 'connectivity_test.csv'), 'w', newline='') as f:
         writer = csv.writer(f)
@@ -154,11 +144,24 @@ def test_throughput_basic(duration=10):
                     err = data.get('error', 'unknown')
                     print(f"    -> {name:15s}: FAILED ({err})")
 
+
 def get_my_ips():
-    """Restituisce gli IP locali dell'host corrente."""
+    """Restituisce gli IP locali dell'host corrente.
+
+    Usa 'ip -4 addr show' invece di 'hostname -I' perche' quest'ultimo
+    non funziona in modo affidabile nei namespace di rete di Mininet.
+    """
     try:
-        result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
-        return set(result.stdout.strip().split())
+        result = subprocess.run(['ip', '-4', 'addr', 'show'],
+                                capture_output=True, text=True)
+        ips = set()
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            if line.startswith('inet '):
+                ip = line.split()[1].split('/')[0]
+                if ip != '127.0.0.1':
+                    ips.add(ip)
+        return ips
     except Exception:
         return set()
 
@@ -169,7 +172,6 @@ def test_throughput_load(duration=10):
     print(f"TEST 3: Throughput sotto Carico (flussi simultanei)")
     print("=" * 60)
 
-    # Lancia test simultanei verso host VLAN1, escludendo se stesso
     my_ips = get_my_ips()
     targets = {
         name: ip for name, ip in {
@@ -186,7 +188,6 @@ def test_throughput_load(duration=10):
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    # Test con 1, 2, 3 flussi simultanei
     for num_flows in [1, 2, 3]:
         print(f"\n  --- {num_flows} flusso/i simultaneo/i ---")
         flow_targets = list(targets.items())[:num_flows]
@@ -201,7 +202,6 @@ def test_throughput_load(duration=10):
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             processes.append((name, ip, p, log_file))
 
-        # Attendi completamento
         for name, ip, p, log_file in processes:
             stdout, stderr = p.communicate(timeout=duration + 30)
             output = stdout.decode().strip()
@@ -212,8 +212,6 @@ def test_throughput_load(duration=10):
                 if len(fields) >= 9:
                     bw_mbps = int(fields[8]) / 1e6
                     print(f"    -> {name}: {bw_mbps:.2f} Mbps")
-
-                    # Salva CSV
                     with open(log_file, 'w') as f:
                         f.write(output + '\n')
                 else:
@@ -221,7 +219,6 @@ def test_throughput_load(duration=10):
             else:
                 print(f"    -> {name}: FAILED")
 
-        # Pausa tra i test
         if num_flows < 3:
             time.sleep(2)
 
@@ -247,9 +244,8 @@ def test_vlan_isolation():
     my_ips = get_my_ips()
     print(f"  Host corrente: IP={my_ips}, VLAN={my_vlan if my_vlan else 'sconosciuta'}")
 
-    # Risultati attesi dipendono dalla VLAN corrente:
-    # - VLAN1: PROXY raggiungibile (OK), S1/S2 bloccati da iptables (OK)
-    # - VLAN2: PROXY, S1, S2 tutti bloccati da firewall su R1 (OK)
+    # VLAN1: PROXY raggiungibile, S1/S2 bloccati da iptables (solo via PROXY)
+    # VLAN2: PROXY, S1, S2 tutti bloccati dal firewall R1
     expected = {
         'PROXY': {1: 'success', 2: 'fail'},
         'S1':    {1: 'fail',    2: 'fail'},
@@ -299,7 +295,6 @@ def test_proxy_access():
     print("TEST 5: Verifica Accesso via PROXY")
     print("=" * 60)
 
-    # Accesso tramite PROXY (deve funzionare da VLAN1)
     print("  Via PROXY:")
     for server in ['s1', 's2']:
         result = api_call(server, 'api/status', timeout=10)
@@ -308,7 +303,6 @@ def test_proxy_access():
         else:
             print(f"    -> {server.upper()} via PROXY: FAILED ({result.get('error', '')})")
 
-    # Accesso diretto (deve fallire)
     print("  Accesso diretto (deve fallire):")
     for name, ip, port in [('S1', '10.0.1.2', 5001), ('S2', '10.0.1.4', 5002)]:
         try:
@@ -331,19 +325,10 @@ def main():
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
-    # Test 1: Connettivita
     test_connectivity()
-
-    # Test 2: Throughput base
     test_throughput_basic(duration=10)
-
-    # Test 3: Throughput sotto carico
     test_throughput_load(duration=10)
-
-    # Test 4: Isolamento VLAN2
     test_vlan_isolation()
-
-    # Test 5: Accesso via PROXY
     test_proxy_access()
 
     print("\n" + "=" * 60)

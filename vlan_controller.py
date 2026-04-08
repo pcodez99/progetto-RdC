@@ -34,11 +34,9 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, vlan, arp, ipv4
 from ryu.lib import mac
 
-# Configurazione VLAN per ogni switch
 VLAN1_ID = 10
 VLAN2_ID = 20
 
-# Mapping: dpid -> {porta: vlan_id} per le access port
 ACCESS_PORTS = {
     1: {  # SW1
         1: VLAN1_ID,   # H1 -> VLAN1
@@ -53,7 +51,6 @@ ACCESS_PORTS = {
     },
 }
 
-# Mapping: dpid -> [porte trunk]
 TRUNK_PORTS = {
     1: [4],   # SW1: porta 4 -> R1
     2: [5],   # SW2: porta 5 -> R1
@@ -65,7 +62,6 @@ class VlanController(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # MAC address table per switch: {dpid: {mac: port}}
         self.mac_to_port = {}
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -75,7 +71,6 @@ class VlanController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # Regola table-miss: manda al controller
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
@@ -117,12 +112,10 @@ class VlanController(app_manager.RyuApp):
         dst = eth.dst
         src = eth.src
 
-        # SW3 (dpid=3): switch L2 semplice, no VLAN
         if dpid == 3:
             self._handle_sw3(datapath, msg, in_port, src, dst, pkt)
             return
 
-        # SW1 (dpid=1) e SW2 (dpid=2): gestione VLAN
         if dpid in ACCESS_PORTS:
             self._handle_vlan_switch(datapath, msg, in_port, src, dst, pkt)
 
@@ -142,7 +135,6 @@ class VlanController(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # Installa flow se la porta di destinazione e' nota
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
             self._add_flow(datapath, 1, match, actions, idle_timeout=300)
@@ -158,14 +150,11 @@ class VlanController(app_manager.RyuApp):
         access_ports = ACCESS_PORTS.get(dpid, {})
         trunk_ports = TRUNK_PORTS.get(dpid, [])
 
-        # Determina la VLAN del pacchetto in ingresso
         vlan_pkt = pkt.get_protocol(vlan.vlan)
 
         if in_port in access_ports:
-            # Pacchetto da access port: assegna VLAN
             pkt_vlan = access_ports[in_port]
         elif in_port in trunk_ports:
-            # Pacchetto da trunk port: leggi VLAN tag
             if vlan_pkt:
                 pkt_vlan = vlan_pkt.vid
             else:
@@ -174,28 +163,23 @@ class VlanController(app_manager.RyuApp):
         else:
             return
 
-        # MAC learning con VLAN: (dpid, vlan) -> {mac: port}
         key = (dpid, pkt_vlan)
         self.mac_to_port.setdefault(key, {})
         self.mac_to_port[key][src] = in_port
 
-        # Determina porta di uscita
         out_port = None
         if dst in self.mac_to_port[key]:
             out_port = self.mac_to_port[key][dst]
 
         if out_port is None:
-            # Flood: invia a tutte le porte della stessa VLAN + trunk
             self._flood_vlan(datapath, msg, in_port, pkt_vlan,
                              access_ports, trunk_ports)
             return
 
-        # Costruisci azioni per la porta di uscita
         actions = self._build_output_actions(parser, in_port, out_port,
                                              pkt_vlan, access_ports,
                                              trunk_ports)
 
-        # Installa flow
         if in_port in access_ports:
             match = parser.OFPMatch(in_port=in_port, eth_dst=dst, eth_src=src)
         else:
@@ -244,7 +228,6 @@ class VlanController(app_manager.RyuApp):
 
         is_in_access = in_port in access_ports
 
-        # Invia a tutte le access port della stessa VLAN (tranne in_port)
         for port, vid in access_ports.items():
             if port == in_port:
                 continue
@@ -255,21 +238,18 @@ class VlanController(app_manager.RyuApp):
                 # Access -> Access: nessun tag
                 actions.append(parser.OFPActionOutput(port))
             else:
-                # Trunk -> Access: pop VLAN tag
+                # Trunk -> Access: ogni porta richiede un pop separato,
+                # quindi inviamo un packet-out distinto per ciascuna
                 actions.append(parser.OFPActionPopVlan())
                 actions.append(parser.OFPActionOutput(port))
-                # Dopo il pop, per la prossima porta serve push di nuovo
-                # Soluzione: usiamo group table o inviamo pacchetti separati
-                # Per semplicita, inviamo il pacchetto direttamente per ogni porta
                 self._send_packet(datapath, msg, actions)
                 actions = []
 
-        # Invia alle trunk port (tranne in_port)
         for port in trunk_ports:
             if port == in_port:
                 continue
             if is_in_access:
-                # Access -> Trunk: push VLAN tag
+                # Access -> Trunk: aggiungi VLAN tag
                 actions.append(parser.OFPActionPushVlan(0x8100))
                 actions.append(parser.OFPActionSetField(
                     vlan_vid=(0x1000 | vlan_id)))
