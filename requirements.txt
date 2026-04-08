@@ -1,0 +1,7 @@
+# Progetto 11 - Dipendenze Python
+# Installare con: pip install -r requirements.txt
+
+flask>=2.0
+matplotlib>=3.5
+numpy>=1.21
+ryu>=4.34
