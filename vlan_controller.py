@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Progetto 11 - Controller Ryu SDN per gestione VLAN
+Progetto RdC Pietro Zarbo - Controller Ryu SDN per gestione VLAN
 Gestisce SW1, SW2 (con VLAN1/VLAN2) e SW3 (L2 semplice).
 
 VLAN ID 10 = VLAN1 (Privileged)  - 192.168.1.0/24
 VLAN ID 20 = VLAN2 (Restricted)  - 192.168.2.0/24
 
-Porte degli switch (assegnate da Mininet in ordine di addLink):
+Porte degli switch
   SW1 (dpid=1):
     porta 1 -> H1  (VLAN1, access)
     porta 2 -> H2  (VLAN2, access)
@@ -25,8 +25,6 @@ Porte degli switch (assegnate da Mininet in ordine di addLink):
     porta 2 -> S1
     porta 3 -> PROXY
     porta 4 -> S2
-
-Avvio: ryu-manager vlan_controller.py
 """
 
 from ryu.base import app_manager
@@ -36,9 +34,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, vlan, arp, ipv4
 from ryu.lib import mac
 
-# ---------------------------------------------------------------------------
 # Configurazione VLAN per ogni switch
-# ---------------------------------------------------------------------------
 VLAN1_ID = 10
 VLAN2_ID = 20
 

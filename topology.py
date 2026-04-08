@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Progetto 11 - Reti di Calcolatori A.A. 2025-2026
+Progetto RdC Pietro Zarbo - Reti di Calcolatori A.A. 2025-2026
 Topologia Mininet: 2 Router L3, 2 Switch L2 VLAN, 10 Host
 
 Topologia:
@@ -23,6 +23,7 @@ from mininet.cli import CLI
 from mininet.log import setLogLevel, info
 import time
 import os
+import sys
 
 # ---------------------------------------------------------------------------
 # Costanti di indirizzamento
@@ -55,19 +56,13 @@ class ProjectTopology(Topo):
     """Topologia del progetto con VLAN, router e service network."""
 
     def build(self):
-        # ==================================================================
+
         # Switch L2 (OpenFlow, gestiti dal controller Ryu)
-        # ==================================================================
         sw1 = self.addSwitch('sw1', cls=OVSKernelSwitch, protocols='OpenFlow13')
         sw2 = self.addSwitch('sw2', cls=OVSKernelSwitch, protocols='OpenFlow13')
         sw3 = self.addSwitch('sw3', cls=OVSKernelSwitch, protocols='OpenFlow13')
 
-        # ==================================================================
         # Host Intranet
-        # ==================================================================
-        # Gli host non hanno IP assegnato qui perche' il controller Ryu
-        # gestisce le VLAN. L'IP viene assegnato dopo con setup_network.
-        # Tuttavia, per semplicita, assegniamo l'IP direttamente.
         h1 = self.addHost('h1', ip=H1_IP, defaultRoute='via 192.168.1.254')
         h2 = self.addHost('h2', ip=H2_IP, defaultRoute='via 192.168.2.254')
         h3 = self.addHost('h3', ip=H3_IP, defaultRoute='via 192.168.1.254')
@@ -76,22 +71,16 @@ class ProjectTopology(Topo):
         h6 = self.addHost('h6', ip=H6_IP, defaultRoute='via 192.168.1.254')
         h7 = self.addHost('h7', ip=H7_IP, defaultRoute='via 192.168.1.254')
 
-        # ==================================================================
         # Router (host Linux con IP forwarding)
-        # ==================================================================
-        r1 = self.addHost('r1', ip='0.0.0.0')  # IP assegnato dopo sulle sub-if
+        r1 = self.addHost('r1', ip='0.0.0.0')
         r2 = self.addHost('r2', ip=R2_WAN_IP.split('/')[0])
 
-        # ==================================================================
         # Host Service Network
-        # ==================================================================
         s1 = self.addHost('s1', ip=S1_IP, defaultRoute='via 10.0.1.1')
         proxy = self.addHost('proxy', ip=PROXY_IP, defaultRoute='via 10.0.1.1')
         s2 = self.addHost('s2', ip=S2_IP, defaultRoute='via 10.0.1.1')
 
-        # ==================================================================
         # Link INTRANET: Host <-> Switch (1Gbps, 5ms)
-        # ==================================================================
         bw_intra = 1000  # Mbps
         delay_intra = '5ms'
 
@@ -108,14 +97,10 @@ class ProjectTopology(Topo):
         self.addLink(h7, sw2, bw=bw_intra, delay=delay_intra, cls=TCLink)  # sw2-eth4
         self.addLink(r1, sw2, bw=bw_intra, delay=delay_intra, cls=TCLink)  # sw2-eth5, r1-eth1
 
-        # ==================================================================
         # Link WAN: R1 <-> R2 (1Gbps, 60ms) - 200.0.1.0/30
-        # ==================================================================
         self.addLink(r1, r2, bw=1000, delay='60ms', cls=TCLink)  # r1-eth2, r2-eth0
 
-        # ==================================================================
         # Link Service Network: R2 <-> SW3, SW3 <-> {S1, PROXY, S2} (1Gbps, 1ms)
-        # ==================================================================
         bw_svc = 1000
         delay_svc = '1ms'
 
@@ -156,9 +141,6 @@ def configure_routers(net):
     r1.cmd('ip link set r1-eth0.20 up')
 
     # -- Sub-interfacce VLAN su r1-eth1 (trunk verso SW2) --
-    # Non assegniamo IP aggiuntivi; usiamo un bridge per unire i trunk
-    # OPPURE: creiamo sub-interfacce e le mettiamo in bridge con quelle di eth0
-    # Approccio piu semplice: bridge le sub-interfacce della stessa VLAN
     r1.cmd('ip link add link r1-eth1 name r1-eth1.10 type vlan id 10')
     r1.cmd('ip link set r1-eth1.10 up')
 
@@ -220,22 +202,22 @@ def configure_firewall(net):
     # VLAN2 NON puo' raggiungere la Service Network o la WAN
     r1.cmd('iptables -A FORWARD -s 192.168.2.0/24 -d 10.0.1.0/24 -j DROP')
     r1.cmd('iptables -A FORWARD -s 192.168.2.0/24 -d 200.0.1.0/30 -j DROP')
-    # Blocca anche il ritorno dalla Service Network verso VLAN2
+
     r1.cmd('iptables -A FORWARD -s 10.0.1.0/24 -d 192.168.2.0/24 -j DROP')
     # VLAN2 puo' comunicare con VLAN1 (default ACCEPT)
     # VLAN1 puo' raggiungere tutto (default ACCEPT)
 
     # ---- PROXY: raggiungibile solo da VLAN1 (192.168.1.0/24) ----
     proxy.cmd('iptables -A INPUT -i lo -j ACCEPT')
-    proxy.cmd('iptables -A INPUT -s 10.0.1.0/24 -j ACCEPT')  # traffico locale service net
-    proxy.cmd('iptables -A INPUT -s 192.168.1.0/24 -j ACCEPT')  # da VLAN1
+    proxy.cmd('iptables -A INPUT -s 10.0.1.0/24 -j ACCEPT')
+    proxy.cmd('iptables -A INPUT -s 192.168.1.0/24 -j ACCEPT')
     proxy.cmd('iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT')
     proxy.cmd('iptables -A INPUT -j DROP')  # tutto il resto bloccato
 
     # ---- S1 e S2: raggiungibili solo dal PROXY ----
     for server in [s1, s2]:
         server.cmd('iptables -A INPUT -i lo -j ACCEPT')
-        server.cmd('iptables -A INPUT -s 10.0.1.3 -j ACCEPT')   # dal PROXY
+        server.cmd('iptables -A INPUT -s 10.0.1.3 -j ACCEPT')
         server.cmd('iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT')
         server.cmd('iptables -A INPUT -j DROP')  # tutto il resto bloccato
 
@@ -246,6 +228,9 @@ def start_services(net):
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
     log_dir = os.path.join(project_dir, 'logs')
+
+    # sys.executable e il python con cui e stato lanciato topology.py (es. il venv containernet)
+    venv_python = sys.executable
 
     # Avvia iperf server (-s) su tutti gli host per ricevere test
     all_hosts = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 's1', 's2', 'proxy']
@@ -259,19 +244,22 @@ def start_services(net):
     s2 = net.get('s2')
 
     flask_script = os.path.join(project_dir, 'flask_server.py')
-    s1.cmd(f'python3 {flask_script} --port 5001 --name S1 --logdir {log_dir} &')
-    s2.cmd(f'python3 {flask_script} --port 5002 --name S2 --logdir {log_dir} &')
+    s1.cmd(f'{venv_python} {flask_script} --port 5001 --name S1 --logdir {log_dir} > {log_dir}/flask_s1.log 2>&1 &')
+    s2.cmd(f'{venv_python} {flask_script} --port 5002 --name S2 --logdir {log_dir} > {log_dir}/flask_s2.log 2>&1 &')
     info('  Flask avviato su S1 (porta 5001) e S2 (porta 5002)\n')
+
+    # Attendi che Flask sia pronto
+    time.sleep(2)
 
     # Avvia NGINX su PROXY
     proxy = net.get('proxy')
     nginx_conf = os.path.join(project_dir, 'nginx_proxy.conf')
-    proxy.cmd(f'nginx -c {nginx_conf}')
+    proxy.cmd(f'nginx -c {nginx_conf} 2>/tmp/nginx_start.log')
     info('  NGINX avviato su PROXY (porta 80)\n')
 
 
 def run():
-    """Funzione principale: crea la rete, configura e avvia la CLI."""
+    """Crea la rete, configura e avvia la CLI."""
     setLogLevel('info')
 
     topo = ProjectTopology()
@@ -287,7 +275,7 @@ def run():
     net.start()
     info('*** Rete avviata\n')
 
-    # Attendi che il controller si colleghi agli switch
+    # senza sleep da errore...
     time.sleep(3)
 
     # Configura router
@@ -296,11 +284,10 @@ def run():
     # Configura firewall
     configure_firewall(net)
 
-    # Avvia servizi (iperf, Flask, NGINX)
+    # Avvia tutti i servizi (iperf, Flask, NGINX)
     start_services(net)
 
-    info('\n*** Rete pronta. Usa la CLI per interagire.\n')
-    info('*** Comandi utili:\n')
+    info('\n*** Rete pronta. CLI utilizzabile.\n')
     info('    h1 ping h3          (VLAN1 <-> VLAN1, stesso switch)\n')
     info('    h1 ping h5          (VLAN1 <-> VLAN1, switch diversi)\n')
     info('    h1 ping h2          (VLAN1 <-> VLAN2)\n')

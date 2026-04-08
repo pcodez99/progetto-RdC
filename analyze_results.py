@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Progetto 11 - Analisi risultati e generazione grafici
+Progetto RdC Pietro Zarbo - Analisi risultati e generazione grafici
 Legge i log CSV prodotti dai test iperf e genera grafici con matplotlib.
 
 Uso:
@@ -14,7 +14,7 @@ import os
 import sys
 
 import matplotlib
-matplotlib.use('Agg')  # Backend non interattivo
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np

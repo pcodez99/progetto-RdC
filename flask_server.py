@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Progetto 11 - Server Flask per test iperf TCP
+Progetto RdC Pietro Zarbo - Server Flask per test iperf TCP
 Esegue su S1 e S2. Fornisce API REST per lanciare test di throughput TCP
 verso tutti i nodi della topologia, con logging CSV.
 

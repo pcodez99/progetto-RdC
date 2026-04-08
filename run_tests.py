@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Progetto 11 - Script per eseguire test di performance
+Progetto RdC Pietro Zarbo - Script per eseguire test di performance
 Da eseguire DENTRO Mininet dopo che la rete e' attiva.
 
 Questo script viene eseguito da un host VLAN1 (es. H1) e:
@@ -16,6 +16,7 @@ Uso da CLI Mininet:
 import csv
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -126,8 +127,6 @@ def test_connectivity():
                 r['status'], r['rtt_min'], r['rtt_avg'], r['rtt_max'],
                 r['packet_loss']
             ])
-
-    print(f"\n  Risultati salvati in {LOG_DIR}/connectivity_test.csv")
     return results
 
 
@@ -155,7 +154,13 @@ def test_throughput_basic(duration=10):
                     err = data.get('error', 'unknown')
                     print(f"    -> {name:15s}: FAILED ({err})")
 
-    print(f"\n  Risultati salvati nei log CSV dei server")
+def get_my_ips():
+    """Restituisce gli IP locali dell'host corrente."""
+    try:
+        result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
+        return set(result.stdout.strip().split())
+    except Exception:
+        return set()
 
 
 def test_throughput_load(duration=10):
@@ -164,13 +169,20 @@ def test_throughput_load(duration=10):
     print(f"TEST 3: Throughput sotto Carico (flussi simultanei)")
     print("=" * 60)
 
-    # Lancia test simultanei da S1 verso piu host VLAN1
-    # Usiamo iperf direttamente per il parallelismo
+    # Lancia test simultanei verso host VLAN1, escludendo se stesso
+    my_ips = get_my_ips()
     targets = {
-        'H1': '192.168.1.1',
-        'H3': '192.168.1.2',
-        'H5': '192.168.1.3',
+        name: ip for name, ip in {
+            'H1': '192.168.1.1',
+            'H3': '192.168.1.2',
+            'H5': '192.168.1.3',
+            'H6': '192.168.1.4',
+        }.items() if ip not in my_ips
     }
+
+    if not targets:
+        print("  ERRORE: nessun target disponibile (tutti gli IP sono locali)")
+        return
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -214,30 +226,71 @@ def test_throughput_load(duration=10):
             time.sleep(2)
 
 
+def get_my_vlan():
+    """Determina la VLAN dell'host corrente in base all'IP."""
+    my_ips = get_my_ips()
+    for ip in my_ips:
+        if ip.startswith('192.168.1.'):
+            return 1
+        if ip.startswith('192.168.2.'):
+            return 2
+    return None
+
+
 def test_vlan_isolation():
     """Test 4: Verifica isolamento VLAN2."""
     print("\n" + "=" * 60)
     print("TEST 4: Verifica Isolamento VLAN2")
     print("=" * 60)
 
-    print("  Nota: questo test verifica che VLAN2 NON puo' raggiungere")
-    print("  la Service Network. Eseguire da un host VLAN2 (H2 o H4).")
-    print("  Da CLI Mininet:")
-    print("    h2 ping -c 3 10.0.1.3   (deve fallire)")
-    print("    h2 ping -c 3 192.168.1.1 (deve funzionare - verso VLAN1)")
-    print("    h4 ping -c 3 10.0.1.3   (deve fallire)")
+    my_vlan = get_my_vlan()
+    my_ips = get_my_ips()
+    print(f"  Host corrente: IP={my_ips}, VLAN={my_vlan if my_vlan else 'sconosciuta'}")
 
-    # Verifica dal nodo corrente
+    # Risultati attesi dipendono dalla VLAN corrente:
+    # - VLAN1: PROXY raggiungibile (OK), S1/S2 bloccati da iptables (OK)
+    # - VLAN2: PROXY, S1, S2 tutti bloccati da firewall su R1 (OK)
+    expected = {
+        'PROXY': {1: 'success', 2: 'fail'},
+        'S1':    {1: 'fail',    2: 'fail'},
+        'S2':    {1: 'fail',    2: 'fail'},
+    }
+
     external_targets = {
         'PROXY': '10.0.1.3',
         'S1': '10.0.1.2',
         'S2': '10.0.1.4',
     }
 
+    all_ok = True
     for name, ip in external_targets.items():
         result = ping_test(ip, count=2, timeout=3)
-        status = 'RAGGIUNGIBILE' if result['status'] == 'success' else 'BLOCCATO'
-        print(f"  -> {name} ({ip}): {status}")
+        reachable = result['status'] == 'success'
+        status_str = 'RAGGIUNGIBILE' if reachable else 'BLOCCATO'
+
+        if my_vlan in (1, 2):
+            exp = expected[name][my_vlan]
+            correct = (reachable and exp == 'success') or (not reachable and exp == 'fail')
+            verdict = 'OK' if correct else 'ERRORE'
+            if not correct:
+                all_ok = False
+        else:
+            verdict = '?'
+
+        print(f"  -> {name} ({ip}): {status_str} [{verdict}]")
+
+    if my_vlan == 1:
+        print("\n  Da VLAN1 il PROXY deve essere raggiungibile,")
+        print("  S1/S2 bloccati da iptables (accesso solo via PROXY).")
+        print("  Per testare l'isolamento VLAN2 eseguire:")
+        print(f"    h2 python3 {os.path.abspath(__file__)}")
+    elif my_vlan == 2:
+        print("\n  Da VLAN2 PROXY/S1/S2 devono essere tutti bloccati.")
+
+    if all_ok and my_vlan:
+        print("\n  Isolamento VLAN: CORRETTO")
+    elif not all_ok:
+        print("\n  ERRORE")
 
 
 def test_proxy_access():
@@ -262,7 +315,7 @@ def test_proxy_access():
             cmd = ['curl', '-s', '-m', '5', f'http://{ip}:{port}/api/status']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0 and result.stdout:
-                print(f"    -> {name} diretto: RAGGIUNGIBILE (ERRORE: dovrebbe essere bloccato!)")
+                print(f"    -> {name} diretto: RAGGIUNGIBILE ERRORE")
             else:
                 print(f"    -> {name} diretto: BLOCCATO (corretto)")
         except Exception:
@@ -272,7 +325,7 @@ def test_proxy_access():
 def main():
     """Esegue tutti i test in sequenza."""
     print("=" * 60)
-    print("  PROGETTO 11 - TEST DI PERFORMANCE")
+    print("  Progetto RdC Pietro Zarbo - TEST DI PERFORMANCE")
     print(f"  Timestamp: {datetime.now().isoformat()}")
     print("=" * 60)
 

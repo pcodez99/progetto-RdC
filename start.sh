@@ -1,16 +1,18 @@
 #!/bin/bash
 # ===========================================================
-# Progetto 11 - Script di avvio completo
+# Script di avvio
 # ===========================================================
 # Uso: sudo ./start.sh
 #
 # Prerequisiti:
-#   - Mininet installato
-#   - Ryu installato (pip install ryu)
-#   - Flask installato (pip install flask)
-#   - NGINX installato (apt install nginx)
-#   - iperf installato (apt install iperf)
-#   - matplotlib e pandas (pip install matplotlib pandas numpy)
+#   - Mininet / Containernet
+#   - Ryu (installato nel venv locale: ./venv/)
+#   - Flask, NGINX, iperf
+#
+# Configurazione:
+#   Copia .env.example in .env e imposta i percorsi della tua macchina.
+#   I valori nel .env possono essere sovrascritti con variabili d'ambiente:
+#     sudo CONTAINERNET_VENV=/altro/path ./start.sh
 # ===========================================================
 
 set -e
@@ -18,20 +20,64 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Sotto sudo, $HOME diventa /root: recupera la home dell'utente reale
+REAL_HOME="$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)"
+
+# Carica .env se esiste (non sovrascrive variabili gia' impostate nell'ambiente)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    HOME="$REAL_HOME" source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Percorsi del venv Ryu (locale al progetto)
+RYU_PYTHON="$(ls "$SCRIPT_DIR/venv/bin/python3"* 2>/dev/null | grep -E 'python3(\.[0-9]+)?$' | sort -V | tail -1)"
+RYU_MANAGER="$SCRIPT_DIR/venv/bin/ryu-manager"
+
+# Ricerca del venv di containernet/mininet
+# Priorita': 1) CONTAINERNET_VENV da .env o ambiente, 2) path comuni, 3) mn di sistema
+if [ -z "$CONTAINERNET_VENV" ]; then
+    for candidate in \
+        "$HOME/containernet/venv" \
+        "/opt/containernet/venv" \
+        "/usr/local/lib/containernet/venv"
+    do
+        if [ -x "$candidate/bin/python3" ]; then
+            CONTAINERNET_VENV="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -n "$CONTAINERNET_VENV" ] && [ -x "$CONTAINERNET_VENV/bin/python3" ]; then
+    MININET_PYTHON="$CONTAINERNET_VENV/bin/python3"
+    MN="$CONTAINERNET_VENV/bin/mn"
+    export PATH="$CONTAINERNET_VENV/bin:$PATH"
+else
+    MININET_PYTHON="$(which python3)"
+    MN="$(which mn 2>/dev/null || echo '')"
+    if [ -z "$MN" ]; then
+        echo "ERRORE: mn (mininet) non trovato."
+        echo "  1) Copia .env.example in .env e imposta CONTAINERNET_VENV"
+        echo "  2) Oppure: sudo CONTAINERNET_VENV=/path/to/venv ./start.sh"
+        exit 1
+    fi
+fi
+
 echo "=============================================="
-echo "  Progetto 11 - Avvio Sistema di Rete"
+echo "  Progetto RdC - Avvio Sistema di Rete"
 echo "=============================================="
 
 # Verifica root
 if [ "$EUID" -ne 0 ]; then
     echo "ERRORE: Eseguire con sudo"
-    echo "Uso: sudo ./start.sh"
+    echo "  sudo ./start.sh"
     exit 1
 fi
 
 # Cleanup precedente
 echo "[1/5] Cleanup sessione Mininet precedente..."
-mn -c 2>/dev/null || true
+"$MN" -c 2>/dev/null || true
 
 # Kill processi precedenti
 echo "[2/5] Kill processi precedenti..."
@@ -45,13 +91,12 @@ mkdir -p "$SCRIPT_DIR/graphs"
 
 # Avvia controller Ryu
 echo "[3/5] Avvio controller Ryu SDN..."
-ryu-manager "$SCRIPT_DIR/vlan_controller.py" \
+"$RYU_MANAGER" "$SCRIPT_DIR/vlan_controller.py" \
     --ofp-tcp-listen-port 6653 \
-    --verbose 2>&1 | tee "$SCRIPT_DIR/logs/ryu_controller.log" &
+    2>&1 | tee "$SCRIPT_DIR/logs/ryu_controller.log" &
 RYU_PID=$!
 echo "  Controller Ryu avviato (PID: $RYU_PID)"
 
-# Attendi che il controller sia pronto
 echo "[4/5] Attesa avvio controller (3 secondi)..."
 sleep 3
 
@@ -62,17 +107,10 @@ if ! kill -0 $RYU_PID 2>/dev/null; then
     exit 1
 fi
 
-# Avvia topologia Mininet
+# Avvia Mininet
 echo "[5/5] Avvio topologia Mininet..."
 echo ""
 echo "=============================================="
-echo "  La CLI di Mininet si aprira' a breve."
-echo "  Comandi utili:"
-echo "    pingall              - Test connettivita"
-echo "    h1 ping h3           - Ping VLAN1<->VLAN1"
-echo "    h1 ping h2           - Ping VLAN1<->VLAN2"
-echo "    h2 ping 10.0.1.3    - VLAN2->esterno (BLOCCATO)"
-echo ""
 echo "  Per i test di performance:"
 echo "    h1 python3 $SCRIPT_DIR/run_tests.py"
 echo ""
@@ -82,11 +120,11 @@ echo "    python3 $SCRIPT_DIR/analyze_results.py"
 echo "=============================================="
 echo ""
 
-python3 "$SCRIPT_DIR/topology.py"
+"$MININET_PYTHON" "$SCRIPT_DIR/topology.py"
 
 # Cleanup alla chiusura
 echo ""
 echo "Cleanup..."
 pkill -f ryu-manager 2>/dev/null || true
-mn -c 2>/dev/null || true
+"$MN" -c 2>/dev/null || true
 echo "Fatto."
